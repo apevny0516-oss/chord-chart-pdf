@@ -10,8 +10,11 @@ from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen.canvas import Canvas
 
 from .diagrams import draw_diagram, shapes_for
-from .model import Bar, BarLine, Chart, Roadmap, Section
+from .model import Bar, BarLine, Chart, Roadmap, ScaleDiagram, Section, Tab
+from .neck import draw_scale, scale_height
+from .notation import REST_W, draw_fermata, draw_rest, draw_rhythm, rhythm_events, rhythm_width
 from .parser import ChartError
+from .tab import column_width, draw_tab, tab_height
 from .text import ARROW, BOLD, REGULAR, pretty, width
 
 PAGE_W, PAGE_H = letter
@@ -71,19 +74,37 @@ def _draw_label_box(c: Canvas, label: str, x: float, y_bottom: float, h: float, 
     return w
 
 
-def _section_header(section: Section, first: bool) -> Block:
+STRUM_SCALE = 0.85
+
+
+def _section_header(section: Section, first: bool) -> Block | None:
+    if not (section.label or section.name or section.strum):
+        return None
     gap = 0 if first else 12
+    accents = bool(section.strum) and any(">" in t for t in section.strum)
 
     def draw(c: Canvas, y: float, s: float) -> None:
         bottom = y - gap * s - 18
-        w = _draw_label_box(c, section.label, MARGIN, bottom, 18, 12)
+        x = MARGIN
+        if section.label:
+            x += _draw_label_box(c, section.label, x, bottom, 18, 12) + 8
         if section.name:
             c.setFillColor(GREY)
             c.setFont(BOLD, 11)
-            c.drawString(MARGIN + w + 8, bottom + 5, section.name.upper())
+            c.drawString(x, bottom + 5, section.name.upper())
+            x += width(section.name.upper(), BOLD, 11) + 8
+        c.setFillColor(black)
+        c.setStrokeColor(black)
+        if section.strum:
+            x += 8
+            x += draw_rhythm(c, section.strum, x, bottom + 2, STRUM_SCALE) + 4
+        if section.strum_note:
+            c.setFillColor(GREY)
+            c.setFont(REGULAR, 9.5)
+            c.drawString(x, bottom + 5, section.strum_note)
             c.setFillColor(black)
 
-    return Block(20, gap + 4, draw, keep_with_next=True)
+    return Block(20 + (5 if accents else 0), gap + 4, draw, keep_with_next=True)
 
 
 # ---------- bar rows ----------
@@ -96,14 +117,64 @@ def _pads(bar: Bar) -> tuple[float, float]:
     return (20 if bar.repeat_start else 9), (15 if bar.repeat_end else 10 if bar.final else 4)
 
 
+FERMATA = "(fermata)"
+_REST_ITEM = re.compile(r"^r(16|8|4|2|1)\.?$")
+
+
+def item_kind(item: str) -> str:
+    if item == "%":
+        return "simile"
+    if _REST_ITEM.match(item):
+        return "rest"
+    if item.startswith("("):
+        return "rhythm"
+    return "chord"
+
+
+def chord_name(item: str) -> str:
+    return item[:-len(FERMATA)] if item.endswith(FERMATA) else item
+
+
+def item_width(item: str, size: float) -> float:
+    kind = item_kind(item)
+    if kind == "simile":
+        return SIMILE_W
+    if kind == "rest":
+        return REST_W
+    if kind == "rhythm":
+        return rhythm_width(item[1:-1].split())
+    return width(pretty(chord_name(item)), BOLD, size)
+
+
+ITEM_GAP = 8.0
+
+
+def _chords_only(bar: Bar) -> bool:
+    return all(item_kind(i) == "chord" for i in bar.chords)
+
+
 def bar_need(bar: Bar, size: float) -> float:
-    """Narrowest width at which this bar's chords clear its barlines."""
+    """Narrowest width at which this bar's contents clear its barlines."""
     left, right = _pads(bar)
-    if bar.chords == ["%"]:
-        return left + right + SIMILE_W
-    gap = 6 if len(bar.chords) > 1 else 2
-    widest = max(width(pretty(ch), BOLD, size) for ch in bar.chords)
-    return left + right + len(bar.chords) * (widest + gap)
+    widths = [item_width(item, size) for item in bar.chords]
+    if _chords_only(bar):        # equal slots, so two chords read as half a bar each
+        gap = 6 if len(widths) > 1 else 2
+        return left + right + len(widths) * (max(widths) + gap)
+    return left + right + sum(widths) + ITEM_GAP * (len(widths) - 1) + 2
+
+
+def item_positions(bar: Bar, left: float, right: float, size: float) -> list[float]:
+    """Left x of each item between the bar's inner edges."""
+    k = len(bar.chords)
+    if _chords_only(bar):
+        return [left + i * (right - left) / k for i in range(k)]
+    widths = [item_width(item, size) for item in bar.chords]
+    gap = min(28.0, (right - left - sum(widths)) / k)
+    xs, x = [], left
+    for w in widths:
+        xs.append(x)
+        x += w + gap
+    return xs
 
 
 @dataclass
@@ -173,7 +244,8 @@ def _draw_simile(c: Canvas, cx: float, baseline: float) -> None:
 
 def _bar_row(row: Row) -> Block:
     bars = row.bars
-    extras = EXTRAS_H if any(b.ending or b.repeat_count for b in bars) else 0
+    extras = EXTRAS_H if any(
+        b.ending or b.repeat_count or any(i.endswith(FERMATA) for i in b.chords) for b in bars) else 0
     edges = [MARGIN]
     for w in row.widths:
         edges.append(edges[-1] + w)
@@ -206,14 +278,24 @@ def _bar_row(row: Row) -> Block:
             # chords
             pad_l, pad_r = _pads(bar)
             left, right = x0 + pad_l, x1 - pad_r
-            if bar.chords == ["%"]:
-                _draw_simile(c, (left + right) / 2, baseline)
-            else:
-                slot = (right - left) / len(bar.chords)
-                size = fitted_font_size(bar.chords, slot - 1, row.size)
-                c.setFont(BOLD, size)
-                for k, chord in enumerate(bar.chords):
-                    c.drawString(left + k * slot, baseline, pretty(chord))
+            slot = (right - left) / len(bar.chords)
+            xs = item_positions(bar, left, right, row.size)
+            for k, item in enumerate(bar.chords):
+                sx = xs[k]
+                kind = item_kind(item)
+                if kind == "simile":
+                    _draw_simile(c, sx + SIMILE_W / 2 if len(bar.chords) > 1 else (left + right) / 2, baseline)
+                elif kind == "rest":
+                    draw_rest(c, int(_REST_ITEM.match(item).group(1)), sx, baseline)
+                elif kind == "rhythm":
+                    draw_rhythm(c, item[1:-1].split(), sx, baseline + 1)
+                else:
+                    name = pretty(chord_name(item))
+                    size = fitted_font_size([chord_name(item)], slot - 1, row.size)
+                    c.setFont(BOLD, size)
+                    c.drawString(sx, baseline, name)
+                    if item.endswith(FERMATA):
+                        draw_fermata(c, sx + width(name, BOLD, size) / 2, baseline + size * 0.93)
             # repeat count
             count_w = 0.0
             if bar.repeat_count:
@@ -270,8 +352,21 @@ def runs_width(line: list[Run]) -> float:
 def roadmap_lines(item: Roadmap, labels: set[str]) -> list[list[Run]]:
     """Split a roadmap note into lines that fit the page width."""
     atoms: list[Run] = [("arrow", "")]
-    for tok in item.text.split():
-        atoms.append(("arrow", "") if tok == "->" else ("label", tok) if tok in labels else ("text", tok))
+    toks = item.text.split()
+    i = 0
+    while i < len(toks):
+        if toks[i] == "->":
+            atoms.append(("arrow", ""))
+            i += 1
+            continue
+        for j in range(len(toks), i, -1):          # longest label first: "CHORUS 2" before "CHORUS"
+            if " ".join(toks[i:j]) in labels:
+                atoms.append(("label", " ".join(toks[i:j])))
+                i = j
+                break
+        else:
+            atoms.append(("text", toks[i]))
+            i += 1
     lines: list[list[Run]] = [[]]
     for atom in atoms:
         line = lines[-1]
@@ -400,14 +495,30 @@ def _draw_footer(c: Canvas, chart: Chart) -> None:
 
 # ---------- top level ----------
 
+def _scale_block(item: ScaleDiagram) -> Block:
+    return Block(scale_height() + 4, 8, lambda c, y, s: draw_scale(c, item, MARGIN, y - 4 * s, CONTENT_W))
+
+
+def _tab_block(item: Tab) -> Block:
+    if column_width(item, CONTENT_W) is None:
+        raise ChartError("tab is too wide for the page; split it into two 'tab:' blocks")
+    return Block(tab_height(item) + 2, 8, lambda c, y, s: draw_tab(c, item, MARGIN, y - 4 * s, CONTENT_W))
+
+
 def _blocks(chart: Chart) -> list[Block]:
-    labels = {s.label for s in chart.sections}
+    labels = {s.label for s in chart.sections if s.label}
     blocks: list[Block] = []
-    for n, section in enumerate(chart.sections):
-        blocks.append(_section_header(section, first=(n == 0)))
+    for section in chart.sections:
+        header = _section_header(section, first=not blocks)
+        if header:
+            blocks.append(header)
         for item in section.items:
             if isinstance(item, Roadmap):
                 blocks.append(_roadmap(item, labels))
+            elif isinstance(item, ScaleDiagram):
+                blocks.append(_scale_block(item))
+            elif isinstance(item, Tab):
+                blocks.append(_tab_block(item))
             else:
                 blocks.extend(_bar_row(row) for row in plan_rows(item, chart.bars_per_line))
     return blocks

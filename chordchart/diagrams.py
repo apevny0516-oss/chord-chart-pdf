@@ -33,6 +33,19 @@ def shapes_for(chart: Chart) -> list[Shape]:
     return shapes
 
 
+def barres(shape: Shape) -> list[tuple[int, int, int, str]]:
+    """(fret, low string index, high string index, finger) for each finger covering 2+ strings."""
+    if not shape.fingers:
+        return []
+    found = []
+    for finger in "1234":
+        idx = [i for i, f in enumerate(shape.fingers) if f == finger and shape.frets[i] not in "x0"]
+        frets = {shape.frets[i] for i in idx}
+        if len(idx) >= 2 and len(frets) == 1:
+            found.append((int(frets.pop()), idx[0], idx[-1], finger))
+    return found
+
+
 def draw_diagram(canvas, shape: Shape, x: float, y: float, width: float) -> float:
     """Draw a diagram with its top-left corner at (x, y). Returns the height used."""
     frets = [None if ch == "x" else int(ch) for ch in shape.frets]
@@ -64,6 +77,16 @@ def draw_diagram(canvas, shape: Shape, x: float, y: float, width: float) -> floa
 
     r = gap * 0.38
     mark_y = top + gap * 0.5
+    barred: dict[int, str] = {}       # string index -> finger label ("" = covered, no label)
+    for fret, lo, hi, finger in barres(shape):
+        cy = top - (fret - base + 0.5) * fret_h
+        canvas.setLineWidth(2 * r)
+        canvas.setLineCap(1)
+        canvas.line(left + lo * gap, cy, left + hi * gap, cy)
+        canvas.setLineCap(0)
+        for i in range(lo, hi + 1):
+            if shape.fingers[i] == finger:
+                barred[i] = finger if i == lo else ""
     for i, f in enumerate(frets):
         cx = left + i * gap
         if f is None:
@@ -76,8 +99,9 @@ def draw_diagram(canvas, shape: Shape, x: float, y: float, width: float) -> floa
             canvas.circle(cx, mark_y, gap * 0.26, stroke=1, fill=0)
         else:
             cy = top - (f - base + 0.5) * fret_h
-            canvas.circle(cx, cy, r, stroke=0, fill=1)
-            finger = shape.fingers[i] if shape.fingers else "-"
+            if i not in barred:
+                canvas.circle(cx, cy, r, stroke=0, fill=1)
+            finger = barred.get(i, shape.fingers[i] if shape.fingers else "-")
             if finger.isdigit():
                 canvas.setFillColorRGB(1, 1, 1)
                 canvas.setFont(BOLD, r * 1.35)

@@ -28,7 +28,9 @@ class Roadmap:
 class Section:
     label: str
     name: str
-    items: list[BarLine | Roadmap] = field(default_factory=list)
+    items: list = field(default_factory=list)   # BarLine | Roadmap | ScaleDiagram | Tab
+    strum: list[str] | None = None              # rhythm tokens, e.g. ["8>", "8"]
+    strum_note: str | None = None
 
 
 @dataclass
@@ -48,3 +50,18 @@ class Chart:
     sections: list[Section] = field(default_factory=list)
     custom_shapes: list[Shape] = field(default_factory=list)
     diagram_names: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ScaleDiagram:
+    name: str
+    dots: dict[int, list[int]]    # string number (1 = high E) -> frets
+    first_fret: int = 1
+    last_fret: int = 12
+
+
+@dataclass
+class Tab:
+    strings: list[str]            # ASCII tab lines, equal length, label before the first '|'
+    above: list[str] = field(default_factory=list)   # annotation lines, column-aligned
+    below: list[str] = field(default_factory=list)

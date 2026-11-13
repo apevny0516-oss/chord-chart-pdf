@@ -47,7 +47,6 @@ def test_diagram_lines():
     "[A]\n||: C | {1,2: G :||",
     "[A]\nC | G :||",
     "tempo: 120\n[A]\nC |",
-    "C | G |",
     "[A]\ndiagram G: x2003",
     "",
 ])
