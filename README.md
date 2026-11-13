@@ -15,3 +15,7 @@ strumming lines, fermatas, tab, scale necks, chord diagrams with barres). Errors
 `line N:`. Tests: `pip install pytest pypdf && pytest`.
 
 Design notes and the build plan are in `docs/superpowers/`.
+
+Section boxes are coloured by type so students can find a section by colour: verse yellow,
+pre-chorus green, chorus blue, post-chorus teal, bridge purple, solo/interlude orange,
+tag pink, intro/outro uncoloured. A section's name wins over its letter (`[B] Chorus` is blue).

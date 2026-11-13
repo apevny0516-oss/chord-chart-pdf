@@ -21,7 +21,18 @@ PAGE_W, PAGE_H = letter
 MARGIN = 0.6 * 72
 CONTENT_W = PAGE_W - 2 * MARGIN
 
-LABEL_COLORS = {"A": "#FFF27A", "B": "#7DF3FF", "C": "#FF8AF3", "D": "#A8F08A"}
+# Section boxes are coloured by what the section is, so a student can find it by colour.
+SECTION_COLORS = {
+    "verse": "#FFF27A",        # yellow
+    "prechorus": "#A8F08A",    # green
+    "chorus": "#8EC9FF",       # blue
+    "postchorus": "#7FE8D8",   # teal
+    "bridge": "#D6A8FF",       # purple
+    "instrumental": "#FFC27A", # orange: interlude, solo, break
+    "tag": "#FFB3D1",          # pink
+    "intro": "#FFFFFF",        # intro and outro are left uncoloured
+}
+LABEL_COLORS = {"A": "#FFF27A", "B": "#7DF3FF", "C": "#FF8AF3", "D": "#A8F08A"}   # plain letter labels
 OTHER_COLOR = "#DDDDDD"
 CAPO_GREEN = HexColor("#5BB12F")
 GREY = HexColor("#444444")
@@ -36,10 +47,42 @@ DIAGRAM_GAP = 6
 MIN_SCALE = 0.2
 
 
-def label_color(label: str) -> HexColor:
-    if not re.fullmatch(r"[A-Za-z]\d*", label):
-        return HexColor(OTHER_COLOR)
-    return HexColor(LABEL_COLORS.get(label[0].upper(), OTHER_COLOR))
+def section_kind(text: str) -> str | None:
+    """Which kind of section a name like 'Pre-Chorus 2' or 'VERSE' is, or None."""
+    t = re.sub(r"[\d_\-]+", " ", text.lower()).strip()
+    t = re.sub(r"\s+", " ", t)
+    squashed = t.replace(" ", "")
+    if squashed.startswith("prechorus"):
+        return "prechorus"
+    if squashed.startswith("postchorus"):
+        return "postchorus"
+    for kind, words in (("chorus", ("chorus", "refrain", "hook")), ("verse", ("verse",)),
+                        ("bridge", ("bridge",)), ("intro", ("intro", "outro", "coda", "ending")),
+                        ("instrumental", ("interlude", "instrumental", "solo", "break")),
+                        ("tag", ("tag",))):
+        if any(t.startswith(w) for w in words):
+            return kind
+    return None
+
+
+def section_color(label: str, name: str = "") -> HexColor:
+    """Box colour: by the section's name if it has a known type, else its label, else by letter."""
+    for text in (name, label):
+        kind = section_kind(text) if text else None
+        if kind:
+            return HexColor(SECTION_COLORS[kind])
+    if re.fullmatch(r"[A-Za-z]\d*", label):
+        return HexColor(LABEL_COLORS.get(label[0].upper(), OTHER_COLOR))
+    return HexColor(OTHER_COLOR)
+
+
+def label_colors(chart: Chart) -> dict[str, HexColor]:
+    """Colour of each section label, for the boxes drawn in roadmap lines."""
+    colors: dict[str, HexColor] = {}
+    for section in chart.sections:
+        if section.label and section.label not in colors:
+            colors[section.label] = section_color(section.label, section.name)
+    return colors
 
 
 def fitted_font_size(chords: list[str], slot_width: float, base: float = CHORD_SIZE) -> float:
@@ -63,9 +106,9 @@ class Block:
 
 # ---------- section header ----------
 
-def _draw_label_box(c: Canvas, label: str, x: float, y_bottom: float, h: float, size: float) -> float:
+def _draw_label_box(c: Canvas, label: str, color: HexColor, x: float, y_bottom: float, h: float, size: float) -> float:
     w = _label_box_w(label, h, size)
-    c.setFillColor(label_color(label))
+    c.setFillColor(color)
     c.setStrokeColor(black)
     c.setLineWidth(1.5)
     c.rect(x, y_bottom, w, h, stroke=1, fill=1)
@@ -130,7 +173,7 @@ def _section_header(section: Section, first: bool) -> Block | None:
                 c.setFillColor(black)
                 c.setStrokeColor(black)
                 if part == "label":
-                    _draw_label_box(c, section.label, x, bottom, 18, 12)
+                    _draw_label_box(c, section.label, section_color(section.label, section.name), x, bottom, 18, 12)
                 elif part == "name":
                     text = section.name.upper()
                     c.setFillColor(GREY)
@@ -431,8 +474,8 @@ def roadmap_lines(item: Roadmap, labels: set[str]) -> list[list[Run]]:
     return lines
 
 
-def _roadmap(item: Roadmap, labels: set[str]) -> Block:
-    lines = roadmap_lines(item, labels)
+def _roadmap(item: Roadmap, colors: dict[str, HexColor]) -> Block:
+    lines = roadmap_lines(item, set(colors))
 
     def draw(c: Canvas, y: float, s: float) -> None:
         c.setFillColor(black)
@@ -444,7 +487,7 @@ def _roadmap(item: Roadmap, labels: set[str]) -> Block:
                     c.setFont(BOLD, 13)
                     c.drawString(x, bottom + 3.5, ARROW)
                 elif kind == "label":
-                    _draw_label_box(c, value, x, bottom, 16, 10.5)
+                    _draw_label_box(c, value, colors.get(value, HexColor(OTHER_COLOR)), x, bottom, 16, 10.5)
                 else:
                     c.setFont(REGULAR, 11)
                     c.drawString(x, bottom + 4, value)
@@ -568,7 +611,7 @@ def _tab_block(item: Tab) -> Block:
 
 
 def _blocks(chart: Chart) -> list[Block]:
-    labels = {s.label for s in chart.sections if s.label}
+    colors = label_colors(chart)
     blocks: list[Block] = []
     for section in chart.sections:
         header = _section_header(section, first=not blocks)
@@ -576,7 +619,7 @@ def _blocks(chart: Chart) -> list[Block]:
             blocks.append(header)
         for item in section.items:
             if isinstance(item, Roadmap):
-                blocks.append(_roadmap(item, labels))
+                blocks.append(_roadmap(item, colors))
             elif isinstance(item, ScaleDiagram):
                 blocks.append(_scale_block(item))
             elif isinstance(item, Tab):
