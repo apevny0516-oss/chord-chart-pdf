@@ -1,0 +1,27 @@
+title: Actor
+artist: Conan Gray
+capo: 4
+
+[A]
+||: C | Am | Em | G :||
+
+[A] Verse
+||: C | Am | Em | G :|| x4
+
+[A1] Verse 2
+||: C | Am | Em | {1,2,3: G} :|| {4: E7} ||
+
+[B] Chorus
+||: F | G | E7 | Am G :||
+C G/B | Am | % |
+F | G | Am | % | F | G | C | % ||
+-> A1 -> B
+
+[C] Bridge
+||: Am | Em | F | G :|| x2
+Dm | % | G | % |
+-> B (doesn't resolve to C)
+
+diagram G/B: x20033 x2--34
+diagram G/B: x2000x
+diagrams: Dm
