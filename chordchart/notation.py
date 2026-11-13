@@ -49,9 +49,15 @@ def rhythm_width(tokens: list[str], k: float = 1.0) -> float:
     return sum(ADVANCE[e.dur] * (1.3 if e.dotted else 1) for e in rhythm_events(tokens)) * k
 
 
-def draw_rest(c, dur: int, x: float, y: float, k: float = 1.0) -> None:
+REST_DOT_W = 4.0
+
+
+def draw_rest(c, dur: int, x: float, y: float, k: float = 1.0, dotted: bool = False) -> None:
     """Draw a rest with its left edge at x; y is the text baseline."""
     c.saveState()
+    if dotted:
+        dot_x = x + (11.5 if dur in (1, 2) else 8.5) * k
+        c.circle(dot_x, y + (9 if dur in (1, 2) else 8.5) * k, 1.1 * k, stroke=0, fill=1)
     c.setLineCap(1)
     c.setLineJoin(1)
     if dur == 4:
@@ -86,7 +92,7 @@ def draw_rhythm(c, tokens: list[str], x: float, y: float, k: float = 1.0) -> flo
     for e in events:
         px = x + e.x * k
         if e.rest:
-            draw_rest(c, e.dur, px, y, k)
+            draw_rest(c, e.dur, px, y, k, e.dotted)
             continue
         if e.dur >= 4:
             c.setLineWidth(2.3 * k)

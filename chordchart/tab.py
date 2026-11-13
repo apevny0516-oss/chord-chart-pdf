@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from reportlab.lib.colors import HexColor, black, white
 
@@ -11,20 +12,49 @@ from .text import BOLD, REGULAR, width
 STRING_GAP = 9.5
 NOTE_LINE_H = 10.0
 MAX_COL = 8.0
-MIN_COL = 3.4
+MIN_COL = 4.2
+MIN_COL_TWO_DIGIT = 5.5       # two-digit frets need room or they run together
+ABOVE_CLEAR = 7.0             # baseline of the nearest note line above the top string
+BELOW_CLEAR = 13.0            # ... and below the bottom string
 LABEL_W = 12.0
 PAD = 5.0
 
 
+@dataclass
+class Layout:
+    top: float                 # y of the top string
+    bottom: float              # y of the bottom string
+    above: list[float]         # baselines of the note lines above, first line first
+    below: list[float]
+
+
+def _above_h(tab: Tab) -> float:
+    return len(tab.above) * NOTE_LINE_H + 5 if tab.above else 0.0
+
+
+def _below_h(tab: Tab) -> float:
+    return len(tab.below) * NOTE_LINE_H + 6 if tab.below else 0.0
+
+
 def tab_height(tab: Tab) -> float:
-    return (len(tab.above) + len(tab.below)) * NOTE_LINE_H + (len(tab.strings) - 1) * STRING_GAP + 2 * PAD
+    return 2 * PAD + _above_h(tab) + (len(tab.strings) - 1) * STRING_GAP + _below_h(tab)
+
+
+def tab_layout(tab: Tab, y: float) -> Layout:
+    top = y - PAD - _above_h(tab)
+    bottom = top - (len(tab.strings) - 1) * STRING_GAP
+    n = len(tab.above)
+    return Layout(top, bottom,
+                  [top + ABOVE_CLEAR + (n - 1 - i) * NOTE_LINE_H for i in range(n)],
+                  [bottom - BELOW_CLEAR - i * NOTE_LINE_H for i in range(len(tab.below))])
 
 
 def column_width(tab: Tab, avail: float) -> float | None:
-    """Width of one tab column, or None when the tab can't fit in `avail`."""
+    """Width of one tab column, or None when the tab can't fit legibly in `avail`."""
     cols = len(tab.strings[0]) - tab.strings[0].index("|")
+    floor = MIN_COL_TWO_DIGIT if any(re.search(r"\d\d", s) for s in tab.strings) else MIN_COL
     col = min(MAX_COL, (avail - LABEL_W) / cols)
-    return col if col >= MIN_COL else None
+    return col if col >= floor else None
 
 
 def draw_tab(c, tab: Tab, x: float, y: float, avail: float) -> float:
@@ -39,13 +69,12 @@ def draw_tab(c, tab: Tab, x: float, y: float, avail: float) -> float:
         return left + (raw_col - origin + 0.5) * col
 
     c.saveState()
-    top = y - PAD - len(tab.above) * NOTE_LINE_H
-    bottom = top - (len(bodies) - 1) * STRING_GAP
+    lay = tab_layout(tab, y)
+    top, bottom = lay.top, lay.bottom
 
-    def notes(lines: list[str], first_baseline: float) -> None:
+    def notes(lines: list[str], baselines: list[float]) -> None:
         c.setFillColor(black)
-        for n, line in enumerate(lines):
-            by = first_baseline - n * NOTE_LINE_H
+        for line, by in zip(lines, baselines):
             for m in re.finditer(r"[A-Za-z0-9.]+|[^\sA-Za-z0-9.]", line):
                 word = m.group(0)
                 if len(word) > 1 or word.isalnum():
@@ -60,8 +89,8 @@ def draw_tab(c, tab: Tab, x: float, y: float, avail: float) -> float:
                     c.setFont(REGULAR, 8)
                     c.drawCentredString(cx(m.start()), by, word)
 
-    notes(tab.above, y - PAD - NOTE_LINE_H + 3)
-    notes(tab.below, bottom - PAD - 7)
+    notes(tab.above, lay.above)
+    notes(tab.below, lay.below)
 
     # string lines and labels
     c.setStrokeColor(HexColor("#666666"))

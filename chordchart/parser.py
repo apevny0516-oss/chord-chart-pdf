@@ -25,11 +25,12 @@ _CHORD = re.compile(
 _NO_CHORD = {"%", "N.C.", "NC", "N.C"}
 RHYTHM_TOKEN = re.compile(r"^(r)?(16|8|4|2|1)(\.)?(>)?$")
 _REST = re.compile(r"^r(16|8|4|2|1)\.?$")
+_TAB_LINE = re.compile(r"^(\s*[A-Ga-g]?[#b]?) ?(\|.*)$")
+_TAB_CHARS = set("-0123456789|:hpbsxrtvHPBSXTV/\\~()<>^.*= ")
 _GROUP = re.compile(r"\(([^()|{}]*)\)")
 _FERMATA = "(fermata)"
 _STRUM = re.compile(r"^strum\s*:\s*(.*)$")
 _SCALE = re.compile(r"^scale\s+([^:]+?)\s*:\s*(.*)$")
-_TAB_STRING = re.compile(r"^[A-Ga-g]?[#b]?\|[-0-9|:hpbsxr/\\~()<>^. ]*-[-0-9|:hpbsxr/\\~()<>^. ]*$")
 
 
 def is_rhythm_token(tok: str) -> bool:
@@ -43,7 +44,7 @@ def _canonical_item(tok: str) -> str | None:
         return tok
     if tok.startswith("(") and tok.endswith(")"):
         parts = tok[1:-1].split("_")
-        if parts and all(is_rhythm_token(p) for p in parts):
+        if len(parts) >= 2 and all(is_rhythm_token(p) for p in parts):
             return "(" + " ".join(parts) + ")"
         return None
     if tok.lower().endswith(_FERMATA):
@@ -54,7 +55,7 @@ def _canonical_item(tok: str) -> str | None:
 
 def _join_group(m: re.Match) -> str:
     parts = m.group(1).split()
-    if parts and all(is_rhythm_token(p) for p in parts):
+    if len(parts) >= 2 and all(is_rhythm_token(p) for p in parts):
         return "(" + "_".join(parts) + ")"
     return m.group(0)
 
@@ -97,28 +98,53 @@ def _parse_scale(n: int, name: str, rest: str) -> ScaleDiagram:
     return ScaleDiagram(name.strip(), dots, first, last)
 
 
-def _parse_tab(n: int, block: list[str]) -> Tab:
-    """`block` is the raw lines after 'tab:' up to the next blank line."""
-    if not block:
-        raise _err(n, "'tab:' has no tab lines after it")
-    lines = [ln.expandtabs().rstrip() for ln in block]
-    indent = min(len(ln) - len(ln.lstrip()) for ln in lines)
-    lines = [ln[indent:] for ln in lines]
-    tab = Tab([])
-    for offset, ln in enumerate(lines, 1):
-        if _TAB_STRING.match(ln):
-            if tab.below:
+def _looks_like_chart(line: str) -> bool:
+    """True when a line inside a tab block is really the chart carrying on."""
+    line = line.strip().replace("\u2192", "->")
+    if line.startswith(("[", "->", "diagrams:", "tab:")) or _STRUM.match(line) or _SCALE.match(line) \
+            or _DIAGRAM.match(line):
+        return True
+    body = re.sub(r"^(\|\|:|\|)\s*", "", line)
+    first = re.split(r"[\s|]+", body, maxsplit=1)[0]
+    return bool(first) and _canonical_item(first) is not None
+
+
+def _parse_tab(n: int, block: list[str]) -> tuple[Tab, int]:
+    """`block` is the raw lines after 'tab:' up to the next blank line.
+
+    Returns the tab and how many of those lines belong to it.
+    """
+    strings: list[tuple[int, str]] = []
+    above: list[str] = []
+    below: list[str] = []
+    used = 0
+    for offset, raw in enumerate(block, 1):
+        ln = raw.expandtabs().rstrip()
+        m = _TAB_LINE.match(ln)
+        if m and "-" in m.group(2):
+            if below:
                 raise _err(n + offset, "tab string lines must be together, not split by notes")
-            tab.strings.append(ln)
-        elif tab.strings:
-            tab.below.append(ln)
+            bad = sorted(set(m.group(2)) - _TAB_CHARS)
+            if bad:
+                raise _err(n + offset, "tab line has characters I can't draw: " + " ".join(f"'{ch}'" for ch in bad))
+            strings.append((n + offset, m.group(1) + m.group(2)))
+        elif strings:
+            if _looks_like_chart(ln):
+                break
+            below.append(ln)
         else:
-            tab.above.append(ln)
-    if not tab.strings:
-        raise _err(n + 1, "no tab lines found (they look like 'A|--4-4-|')")
-    if len({len(s) for s in tab.strings}) > 1 or len({s.index("|") for s in tab.strings}) > 1:
-        raise _err(n + 1, "tab lines must all be the same length and start in the same column")
-    return tab
+            above.append(ln)
+        used = offset
+    if not strings:
+        raise _err(n + 1 if block else n, "no tab lines found after 'tab:' (they look like 'A|--4-4-|')")
+    lines = above + [s for _, s in strings] + below
+    indent = min(len(ln) - len(ln.lstrip()) for ln in lines)
+    cut = lambda group: [ln[indent:] for ln in group]
+    tab = Tab(cut([s for _, s in strings]), cut(above), cut(below))
+    for (line_no, _), s in zip(strings, tab.strings):
+        if len(s) != len(tab.strings[0]) or s.index("|") != tab.strings[0].index("|"):
+            raise _err(line_no, "tab lines must all be the same length and start in the same column")
+    return tab, used
 
 
 def _err(n: int, msg: str) -> ChartError:
@@ -260,18 +286,27 @@ def parse(text: str) -> Chart:
             continue
         m = _STRUM.match(line)
         if m:
-            current().strum, current().strum_note = _parse_strum(n, m.group(1))
+            if section is None:
+                raise _err(n, "'strum:' must come after a section line like '[A] Verse' or after the first bars")
+            if section.strum:
+                raise _err(n, "this section already has a strum line")
+            section.strum, section.strum_note = _parse_strum(n, m.group(1))
             continue
         m = _SCALE.match(line)
         if m:
             current().items.append(_parse_scale(n, m.group(1), m.group(2)))
             continue
-        if line == "tab:":
+        if re.match(r"^tab\s*:", line):
+            if line.replace(" ", "") != "tab:":
+                raise _err(n, "'tab:' must be on a line by itself, with the tab lines under it")
             block = []
-            while i < len(raw_lines) and raw_lines[i].strip():
-                block.append(raw_lines[i])
-                i += 1
-            current().items.append(_parse_tab(n, block))
+            j = i
+            while j < len(raw_lines) and raw_lines[j].strip():
+                block.append(raw_lines[j])
+                j += 1
+            tab, used = _parse_tab(n, block)
+            current().items.append(tab)
+            i += used
             continue
         if section is None:
             m = _HEADER.match(line)

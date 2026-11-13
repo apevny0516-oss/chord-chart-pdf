@@ -12,7 +12,7 @@ from reportlab.pdfgen.canvas import Canvas
 from .diagrams import draw_diagram, shapes_for
 from .model import Bar, BarLine, Chart, Roadmap, ScaleDiagram, Section, Tab
 from .neck import draw_scale, scale_height
-from .notation import REST_W, draw_fermata, draw_rest, draw_rhythm, rhythm_events, rhythm_width
+from .notation import REST_DOT_W, REST_W, draw_fermata, draw_rest, draw_rhythm, rhythm_events, rhythm_width
 from .parser import ChartError
 from .tab import column_width, draw_tab, tab_height
 from .text import ARROW, BOLD, REGULAR, pretty, width
@@ -29,6 +29,7 @@ GREY = HexColor("#444444")
 CHORD_SIZE = 20
 MIN_CHORD_SIZE = 7
 BAR_H = 28          # height of a barline
+FERMATA_LIFT = 9
 EXTRAS_H = 13       # room above a row for "x4" and ending brackets
 DIAGRAM_W = 56
 DIAGRAM_GAP = 6
@@ -77,34 +78,75 @@ def _draw_label_box(c: Canvas, label: str, x: float, y_bottom: float, h: float, 
 STRUM_SCALE = 0.85
 
 
+HEADER_ROW_H = 20.0
+NOTE_SIZE = 9.5
+
+
+def _part_width(section: Section, part: str) -> float:
+    if part == "label":
+        return _label_box_w(section.label, 18, 12) + 8
+    if part == "name":
+        return min(width(section.name.upper(), BOLD, 11), CONTENT_W) + 8
+    if part == "strum":
+        return 8 + rhythm_width(section.strum, STRUM_SCALE) + 4
+    return min(width(section.strum_note, REGULAR, NOTE_SIZE), CONTENT_W)
+
+
+def header_row_width(section: Section, row: list[str]) -> float:
+    total = sum(_part_width(section, p) for p in row)
+    return total - (8 if row[-1] in ("label", "name") else 0)     # no trailing gap
+
+
+def header_rows(section: Section) -> list[list[str]]:
+    """Split label / name / strum / note into rows that fit the page width."""
+    parts = [p for p, present in (("label", section.label), ("name", section.name),
+                                  ("strum", section.strum), ("note", section.strum_note)) if present]
+    rows: list[list[str]] = []
+    for part in parts:
+        if rows and header_row_width(section, rows[-1] + [part]) <= CONTENT_W:
+            rows[-1].append(part)
+        else:
+            rows.append([part])
+    return rows
+
+
 def _section_header(section: Section, first: bool) -> Block | None:
-    if not (section.label or section.name or section.strum):
+    rows = header_rows(section)
+    if not rows:
         return None
+    if section.strum and _part_width(section, "strum") > CONTENT_W:
+        raise ChartError(f"the strum pattern in section '{section.label or section.name or 'at the top'}' "
+                         "is too long for the page; shorten it to one bar")
     gap = 0 if first else 12
     accents = bool(section.strum) and any(">" in t for t in section.strum)
+    heights = [HEADER_ROW_H + (5 if accents and "strum" in row else 0) for row in rows]
 
     def draw(c: Canvas, y: float, s: float) -> None:
-        bottom = y - gap * s - 18
-        x = MARGIN
-        if section.label:
-            x += _draw_label_box(c, section.label, x, bottom, 18, 12) + 8
-        if section.name:
-            c.setFillColor(GREY)
-            c.setFont(BOLD, 11)
-            c.drawString(x, bottom + 5, section.name.upper())
-            x += width(section.name.upper(), BOLD, 11) + 8
+        row_top = y - gap * s
+        for row, h in zip(rows, heights):
+            bottom = row_top - 18
+            x = MARGIN
+            for part in row:
+                c.setFillColor(black)
+                c.setStrokeColor(black)
+                if part == "label":
+                    _draw_label_box(c, section.label, x, bottom, 18, 12)
+                elif part == "name":
+                    text = section.name.upper()
+                    c.setFillColor(GREY)
+                    c.setFont(BOLD, _shrink(text, BOLD, 11, CONTENT_W))
+                    c.drawString(x, bottom + 5, text)
+                elif part == "strum":
+                    draw_rhythm(c, section.strum, x + 8, bottom + 2, STRUM_SCALE)
+                else:
+                    c.setFillColor(GREY)
+                    c.setFont(REGULAR, _shrink(section.strum_note, REGULAR, NOTE_SIZE, CONTENT_W))
+                    c.drawString(x, bottom + 5, section.strum_note)
+                x += _part_width(section, part)
+            row_top -= h
         c.setFillColor(black)
-        c.setStrokeColor(black)
-        if section.strum:
-            x += 8
-            x += draw_rhythm(c, section.strum, x, bottom + 2, STRUM_SCALE) + 4
-        if section.strum_note:
-            c.setFillColor(GREY)
-            c.setFont(REGULAR, 9.5)
-            c.drawString(x, bottom + 5, section.strum_note)
-            c.setFillColor(black)
 
-    return Block(20 + (5 if accents else 0), gap + 4, draw, keep_with_next=True)
+    return Block(sum(heights), gap + 4, draw, keep_with_next=True)
 
 
 # ---------- bar rows ----------
@@ -118,7 +160,7 @@ def _pads(bar: Bar) -> tuple[float, float]:
 
 
 FERMATA = "(fermata)"
-_REST_ITEM = re.compile(r"^r(16|8|4|2|1)\.?$")
+_REST_ITEM = re.compile(r"^r(16|8|4|2|1)(\.)?$")
 
 
 def item_kind(item: str) -> str:
@@ -140,7 +182,7 @@ def item_width(item: str, size: float) -> float:
     if kind == "simile":
         return SIMILE_W
     if kind == "rest":
-        return REST_W
+        return REST_W + (REST_DOT_W if item.endswith(".") else 0)
     if kind == "rhythm":
         return rhythm_width(item[1:-1].split())
     return width(pretty(chord_name(item)), BOLD, size)
@@ -161,6 +203,13 @@ def bar_need(bar: Bar, size: float) -> float:
         gap = 6 if len(widths) > 1 else 2
         return left + right + len(widths) * (max(widths) + gap)
     return left + right + sum(widths) + ITEM_GAP * (len(widths) - 1) + 2
+
+
+def item_font_size(bar: Bar, item: str, left: float, right: float, row_size: float) -> float:
+    """Font size for a chord. Only all-chord bars use equal slots, so only they need fitting."""
+    if not _chords_only(bar):
+        return row_size
+    return fitted_font_size([chord_name(item)], (right - left) / len(bar.chords) - 1, row_size)
 
 
 def item_positions(bar: Bar, left: float, right: float, size: float) -> list[float]:
@@ -244,8 +293,10 @@ def _draw_simile(c: Canvas, cx: float, baseline: float) -> None:
 
 def _bar_row(row: Row) -> Block:
     bars = row.bars
-    extras = EXTRAS_H if any(
-        b.ending or b.repeat_count or any(i.endswith(FERMATA) for i in b.chords) for b in bars) else 0
+    has_fermata = any(i.endswith(FERMATA) for b in bars for i in b.chords)
+    has_marks = any(b.ending or b.repeat_count for b in bars)
+    lift = FERMATA_LIFT if has_fermata and has_marks else 0    # marks move up, clear of the fermata
+    extras = (EXTRAS_H if has_fermata or has_marks else 0) + lift
     edges = [MARGIN]
     for w in row.widths:
         edges.append(edges[-1] + w)
@@ -286,12 +337,13 @@ def _bar_row(row: Row) -> Block:
                 if kind == "simile":
                     _draw_simile(c, sx + SIMILE_W / 2 if len(bar.chords) > 1 else (left + right) / 2, baseline)
                 elif kind == "rest":
-                    draw_rest(c, int(_REST_ITEM.match(item).group(1)), sx, baseline)
+                    m = _REST_ITEM.match(item)
+                    draw_rest(c, int(m.group(1)), sx, baseline, dotted=bool(m.group(2)))
                 elif kind == "rhythm":
                     draw_rhythm(c, item[1:-1].split(), sx, baseline + 1)
                 else:
                     name = pretty(chord_name(item))
-                    size = fitted_font_size([chord_name(item)], slot - 1, row.size)
+                    size = item_font_size(bar, item, left, right, row.size)
                     c.setFont(BOLD, size)
                     c.drawString(sx, baseline, name)
                     if item.endswith(FERMATA):
@@ -302,7 +354,7 @@ def _bar_row(row: Row) -> Block:
                 label = f"x{bar.repeat_count}"
                 c.setFont(BOLD, 10)
                 count_w = width(label, BOLD, 10) + 6
-                c.drawRightString(x1 - 1, top + 3.5, label)
+                c.drawRightString(x1 - 1, top + 3.5 + lift, label)
             # ending bracket: one per run of bars sharing an ending
             if bar.ending and (i == 0 or bars[i - 1].ending != bar.ending):
                 j = i
@@ -313,7 +365,7 @@ def _bar_row(row: Row) -> Block:
                 bx1 = edges[j + 1] - 3
                 if last.repeat_count:
                     bx1 -= width(f"x{last.repeat_count}", BOLD, 10) + 6
-                by = top + 10.5
+                by = top + 10.5 + lift
                 c.setLineWidth(1.1)
                 c.line(bx0, by - 8, bx0, by)
                 c.line(bx0, by, bx1, by)
