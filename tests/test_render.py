@@ -46,3 +46,13 @@ def test_footer(tmp_path):
     out = tmp_path / "f.pdf"
     render(parse("footer: AGP Music\n[A]\nC |"), str(out))
     assert "AGP Music" in PdfReader(out).pages[0].extract_text()
+
+
+def test_cli(tmp_path):
+    out = tmp_path / "a.pdf"
+    assert subprocess.run([sys.executable, "-m", "chordchart", "examples/actor.chart", str(out)]).returncode == 0
+    assert out.exists()
+    bad = tmp_path / "bad.chart"
+    bad.write_text("[A]\nC | G :||")
+    p = subprocess.run([sys.executable, "-m", "chordchart", str(bad), str(out)], capture_output=True, text=True)
+    assert p.returncode == 1 and p.stderr.startswith("line 2:")
