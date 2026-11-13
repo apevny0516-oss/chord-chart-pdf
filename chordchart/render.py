@@ -10,6 +10,7 @@ from reportlab.pdfgen.canvas import Canvas
 
 from .diagrams import draw_diagram, shapes_for
 from .model import Bar, BarLine, Chart, Roadmap, Section
+from .parser import ChartError
 from .text import ARROW, BOLD, REGULAR, pretty, width
 
 PAGE_W, PAGE_H = letter
@@ -56,7 +57,7 @@ class Block:
 # ---------- section header ----------
 
 def _draw_label_box(c: Canvas, label: str, x: float, y_bottom: float, h: float, size: float) -> float:
-    w = max(h + 4, width(label, BOLD, size) + 10)
+    w = _label_box_w(label, h, size)
     c.setFillColor(label_color(label))
     c.setStrokeColor(black)
     c.setLineWidth(1.5)
@@ -84,11 +85,64 @@ def _section_header(section: Section, first: bool) -> Block:
 
 # ---------- bar rows ----------
 
-def _rows(line: BarLine, per_line: int) -> list[list[Bar]]:
+READABLE_SIZE = 12
+SIMILE_W = 20
+
+
+def _pads(bar: Bar) -> tuple[float, float]:
+    return (20 if bar.repeat_start else 9), (15 if bar.repeat_end else 10 if bar.final else 4)
+
+
+def bar_need(bar: Bar, size: float) -> float:
+    """Narrowest width at which this bar's chords clear its barlines."""
+    left, right = _pads(bar)
+    if bar.chords == ["%"]:
+        return left + right + SIMILE_W
+    gap = 6 if len(bar.chords) > 1 else 2
+    widest = max(width(pretty(ch), BOLD, size) for ch in bar.chords)
+    return left + right + len(bar.chords) * (widest + gap)
+
+
+@dataclass
+class Row:
+    bars: list[Bar]
+    widths: list[float]
+    size: float
+
+
+def _fit_row(bars: list[Bar], per_line: int, min_size: float) -> Row | None:
+    natural = CONTENT_W * len(bars) / max(per_line, len(bars))
+    equal = natural / len(bars)
+    size = float(CHORD_SIZE)
+    while size >= min_size:
+        needs = [bar_need(b, size) for b in bars]
+        if max(needs) <= equal:
+            return Row(bars, [equal] * len(bars), size)
+        if sum(needs) <= CONTENT_W:
+            spare = (CONTENT_W - sum(needs)) / len(bars)
+            return Row(bars, [n + spare for n in needs], size)
+        size -= 0.5
+    return None
+
+
+def _plan_chunk(bars: list[Bar], per_line: int) -> list[Row]:
+    row = _fit_row(bars, per_line, READABLE_SIZE)
+    if row:
+        return [row]
+    if len(bars) > 1:
+        half = (len(bars) + 1) // 2
+        return _plan_chunk(bars[:half], per_line) + _plan_chunk(bars[half:], per_line)
+    row = _fit_row(bars, per_line, 1)
+    if row is None:
+        raise ChartError(f"bar '{' '.join(bars[0].chords)}' is too long to fit on the page")
+    return [row]
+
+
+def plan_rows(line: BarLine, per_line: int) -> list[Row]:
     bars = line.bars
-    if len(bars) <= per_line + 2:
-        return [bars]
-    return [bars[i:i + per_line] for i in range(0, len(bars), per_line)]
+    chunks = [bars] if len(bars) <= per_line + 2 else [
+        bars[i:i + per_line] for i in range(0, len(bars), per_line)]
+    return [row for chunk in chunks for row in _plan_chunk(chunk, per_line)]
 
 
 def _thin(c: Canvas, x: float, y0: float, y1: float) -> None:
@@ -114,9 +168,12 @@ def _draw_simile(c: Canvas, cx: float, baseline: float) -> None:
     c.circle(cx + 6, baseline + 3, 1.9, stroke=0, fill=1)
 
 
-def _bar_row(bars: list[Bar], per_line: int) -> Block:
+def _bar_row(row: Row) -> Block:
+    bars = row.bars
     extras = EXTRAS_H if any(b.ending or b.repeat_count for b in bars) else 0
-    bar_w = CONTENT_W / max(per_line, len(bars))
+    edges = [MARGIN]
+    for w in row.widths:
+        edges.append(edges[-1] + w)
 
     def draw(c: Canvas, y: float, s: float) -> None:
         top = y - extras - 6 * s
@@ -125,8 +182,7 @@ def _bar_row(bars: list[Bar], per_line: int) -> Block:
         c.setStrokeColor(black)
         c.setFillColor(black)
         for i, bar in enumerate(bars):
-            x0 = MARGIN + i * bar_w
-            x1 = x0 + bar_w
+            x0, x1 = edges[i], edges[i + 1]
             # left edge
             if bar.repeat_start:
                 _thick(c, x0 + 1.5, bottom, top)
@@ -145,13 +201,13 @@ def _bar_row(bars: list[Bar], per_line: int) -> Block:
             elif not (i + 1 < len(bars) and bars[i + 1].repeat_start):
                 _thin(c, x1, bottom, top)
             # chords
-            left = x0 + (20 if bar.repeat_start else 9)
-            right = x1 - (15 if bar.repeat_end else 10 if bar.final else 4)
+            pad_l, pad_r = _pads(bar)
+            left, right = x0 + pad_l, x1 - pad_r
             if bar.chords == ["%"]:
                 _draw_simile(c, (left + right) / 2, baseline)
             else:
                 slot = (right - left) / len(bar.chords)
-                size = fitted_font_size(bar.chords, slot - 4)
+                size = fitted_font_size(bar.chords, slot - 1, row.size)
                 c.setFont(BOLD, size)
                 for k, chord in enumerate(bar.chords):
                     c.drawString(left + k * slot, baseline, pretty(chord))
@@ -169,7 +225,7 @@ def _bar_row(bars: list[Bar], per_line: int) -> Block:
                     j += 1
                 last = bars[j]
                 bx0 = x0 + 3
-                bx1 = MARGIN + (j + 1) * bar_w - 3
+                bx1 = edges[j + 1] - 3
                 if last.repeat_count:
                     bx1 -= width(f"x{last.repeat_count}", BOLD, 10) + 6
                 by = top + 10.5
@@ -186,79 +242,138 @@ def _bar_row(bars: list[Bar], per_line: int) -> Block:
 
 # ---------- roadmap ----------
 
-def _roadmap(item: Roadmap, labels: set[str]) -> Block:
-    runs: list[tuple[str, str]] = [("arrow", "")]
+Run = tuple[str, str]          # ("arrow", "") | ("label", "A1") | ("text", "words")
+ROADMAP_INDENT = 2
+ROADMAP_LINE_H = 16
+
+
+def _label_box_w(label: str, h: float, size: float) -> float:
+    return max(h + 4, width(label, BOLD, size) + 10)
+
+
+def _run_width(run: Run) -> float:
+    kind, value = run
+    if kind == "arrow":
+        return width(ARROW, BOLD, 13) + 7
+    if kind == "label":
+        return _label_box_w(value, 16, 10.5) + 7
+    return width(value, REGULAR, 11) + 7
+
+
+def runs_width(line: list[Run]) -> float:
+    return ROADMAP_INDENT + sum(_run_width(r) for r in line)
+
+
+def roadmap_lines(item: Roadmap, labels: set[str]) -> list[list[Run]]:
+    """Split a roadmap note into lines that fit the page width."""
+    atoms: list[Run] = [("arrow", "")]
     for tok in item.text.split():
-        if tok == "->":
-            runs.append(("arrow", ""))
-        elif tok in labels:
-            runs.append(("label", tok))
-        elif runs and runs[-1][0] == "text":
-            runs[-1] = ("text", runs[-1][1] + " " + tok)
+        atoms.append(("arrow", "") if tok == "->" else ("label", tok) if tok in labels else ("text", tok))
+    lines: list[list[Run]] = [[]]
+    for atom in atoms:
+        line = lines[-1]
+        merged = line[:-1] + [("text", line[-1][1] + " " + atom[1])] \
+            if atom[0] == "text" and line and line[-1][0] == "text" else line + [atom]
+        if line and runs_width(merged) > CONTENT_W:
+            lines.append([atom])
         else:
-            runs.append(("text", tok))
+            lines[-1] = merged
+    return lines
+
+
+def _roadmap(item: Roadmap, labels: set[str]) -> Block:
+    lines = roadmap_lines(item, labels)
 
     def draw(c: Canvas, y: float, s: float) -> None:
-        bottom = y - 3 * s - 16
-        x = MARGIN + 2
         c.setFillColor(black)
-        for kind, value in runs:
-            if kind == "arrow":
-                c.setFont(BOLD, 13)
-                c.drawString(x, bottom + 3.5, ARROW)
-                x += width(ARROW, BOLD, 13) + 7
-            elif kind == "label":
-                x += _draw_label_box(c, value, x, bottom, 16, 10.5) + 7
-            else:
-                c.setFont(REGULAR, 11)
-                c.drawString(x, bottom + 4, value)
-                x += width(value, REGULAR, 11) + 7
+        for n, runs in enumerate(lines):
+            bottom = y - 3 * s - 16 - n * ROADMAP_LINE_H * 1.15
+            x = MARGIN + ROADMAP_INDENT
+            for kind, value in runs:
+                if kind == "arrow":
+                    c.setFont(BOLD, 13)
+                    c.drawString(x, bottom + 3.5, ARROW)
+                elif kind == "label":
+                    _draw_label_box(c, value, x, bottom, 16, 10.5)
+                else:
+                    c.setFont(REGULAR, 11)
+                    c.drawString(x, bottom + 4, value)
+                x += _run_width((kind, value))
 
-    return Block(18, 8, draw)
+    return Block(18 + (len(lines) - 1) * ROADMAP_LINE_H * 1.15, 8, draw)
 
 
 # ---------- header ----------
+
+TITLE_SIZE = 24.0
+ARTIST_SIZE = 13.0
+MIN_HEADER_TITLE = 18.0   # below this, diagrams leave the header band
+
+
+@dataclass
+class HeaderPlan:
+    diagrams_in_header: bool
+    right: float          # right edge available to capo/title/artist
+    title_size: float
+    title_width: float
+    artist_size: float
+
+
+def _shrink(text: str | None, font: str, size: float, avail: float, floor: float = 1.0) -> float:
+    while text and size > floor and width(text, font, size) > avail:
+        size -= 0.5
+    return size
+
+
+def header_plan(chart: Chart, shapes) -> HeaderPlan:
+    capo_w = width(f"Capo {chart.capo}", BOLD, 15) + 16 if chart.capo is not None else 0.0
+    full_right = PAGE_W - MARGIN
+
+    def plan(in_header: bool, right: float) -> HeaderPlan:
+        title_w = right - capo_w - MARGIN
+        return HeaderPlan(in_header, right,
+                          _shrink(chart.title, BOLD, TITLE_SIZE, title_w), title_w,
+                          _shrink(chart.artist, REGULAR, ARTIST_SIZE, right - MARGIN))
+
+    strip = len(shapes) * (DIAGRAM_W + DIAGRAM_GAP) - DIAGRAM_GAP
+    if shapes and strip + DIAGRAM_GAP <= CONTENT_W * 0.5:
+        p = plan(True, full_right - strip - 18)
+        if p.title_size >= MIN_HEADER_TITLE and p.artist_size >= ARTIST_SIZE:
+            return p
+    return plan(False, full_right)
+
 
 def _draw_header(c: Canvas, chart: Chart, shapes) -> float:
     """Draw title block and chord diagrams. Returns the y where content starts."""
     top = PAGE_H - MARGIN
     if not (chart.title or chart.artist or chart.capo is not None or shapes):
         return top
-    right = PAGE_W - MARGIN
+    hp = header_plan(chart, shapes)
     diagram_h = 0.0
-    in_header = shapes and len(shapes) * (DIAGRAM_W + DIAGRAM_GAP) <= CONTENT_W * 0.5
-    if in_header:
-        x = right - len(shapes) * DIAGRAM_W - (len(shapes) - 1) * DIAGRAM_GAP
+    if hp.diagrams_in_header:
+        x = hp.right + 18
         for i, shape in enumerate(shapes):
             diagram_h = draw_diagram(c, shape, x + i * (DIAGRAM_W + DIAGRAM_GAP), top, DIAGRAM_W)
-        right = x - 18
-    capo_w = 0.0
     if chart.capo is not None:
-        label = f"Capo {chart.capo}"
         c.setFillColor(CAPO_GREEN)
         c.setFont(BOLD, 15)
-        c.drawRightString(right, top - 21, label)
-        capo_w = width(label, BOLD, 15) + 16
+        c.drawRightString(hp.right, top - 21, f"Capo {chart.capo}")
     c.setFillColor(black)
     text_h = 0.0
     if chart.title:
-        avail = right - capo_w - MARGIN
-        size = 24.0
-        while size > 12 and width(chart.title, BOLD, size) > avail:
-            size -= 1
-        c.setFont(BOLD, size)
+        c.setFont(BOLD, hp.title_size)
         c.drawString(MARGIN, top - 22, chart.title)
         text_h = 28
     if chart.artist:
         c.setFillColor(GREY)
-        c.setFont(REGULAR, 13)
+        c.setFont(REGULAR, hp.artist_size)
         c.drawString(MARGIN, top - text_h - 14, chart.artist)
         c.setFillColor(black)
         text_h += 20
     if chart.capo is not None:
         text_h = max(text_h, 26)
     y = top - max(text_h, diagram_h) - 8
-    if shapes and not in_header:
+    if shapes and not hp.diagrams_in_header:
         per_row = int((CONTENT_W + DIAGRAM_GAP) // (DIAGRAM_W + DIAGRAM_GAP))
         for start in range(0, len(shapes), per_row):
             h = 0.0
@@ -291,8 +406,7 @@ def _blocks(chart: Chart) -> list[Block]:
             if isinstance(item, Roadmap):
                 blocks.append(_roadmap(item, labels))
             else:
-                blocks.extend(_bar_row(row, chart.bars_per_line)
-                              for row in _rows(item, chart.bars_per_line))
+                blocks.extend(_bar_row(row) for row in plan_rows(item, chart.bars_per_line))
     return blocks
 
 

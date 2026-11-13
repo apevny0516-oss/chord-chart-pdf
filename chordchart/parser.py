@@ -15,6 +15,18 @@ _TOKEN = re.compile(r"\s*(\|\|:|:\|\||\|\||\||\{[\d,\s]+:|\}|[^\s|{}:]+)")
 _SECTION = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
 _DIAGRAM = re.compile(r"^diagram\s+(\S+)\s*:\s*(.*)$")
 _HEADER = re.compile(r"^(\w+)\s*:\s*(.*)$")
+_COUNT = r"\(?\s*(?:[xX]\s*(\d+)|(\d+)\s*[xX])\s*\)?"
+_COUNT_AFTER_REPEAT = re.compile(r":\|\|\s*" + _COUNT)
+_COUNT_ONLY = re.compile(r"^" + _COUNT + r"$")
+_CHORD = re.compile(
+    r"^[A-G][#b]?"
+    r"(?:maj|min|dim|aug|sus|add|omit|no|alt|M|m|\u00b0|\u00f8|\u0394|\+|-|[#b]?\d+|\(|\)|,|/\d+)*"
+    r"(?:/[A-G][#b]?)?$")
+_NO_CHORD = {"%", "N.C.", "NC", "N.C"}
+
+
+def _is_chord(tok: str) -> bool:
+    return tok in _NO_CHORD or bool(_CHORD.match(tok))
 
 
 def _err(n: int, msg: str) -> ChartError:
@@ -41,17 +53,22 @@ def _parse_diagram(n: int, name: str, rest: str) -> Shape:
 
 
 def _parse_bars(n: int, line: str, repeat_open: bool) -> tuple[list[Bar], bool]:
+    line = line.replace("\u266f", "#").replace("\u266d", "b")
+    line = _COUNT_AFTER_REPEAT.sub(lambda m: f":|| x{m.group(1) or m.group(2)}", line)
     bars: list[Bar] = []
     chords: list[str] = []
+    ending_first_bar = 0
+    ending_just_closed = False
     start_pending = False
     ending: tuple[int, ...] | None = None
     pending_ending: tuple[int, ...] | None = None
 
     def flush() -> None:
-        nonlocal chords, start_pending, pending_ending
+        nonlocal chords, start_pending, pending_ending, ending_just_closed
         if chords:
             bars.append(Bar(chords, repeat_start=start_pending, ending=pending_ending))
             chords, start_pending, pending_ending = [], False, None
+        ending_just_closed = False
 
     pos = 0
     while pos < len(line):
@@ -86,14 +103,20 @@ def _parse_bars(n: int, line: str, repeat_open: bool) -> tuple[list[Bar], bool]:
             if not all(p.isdigit() for p in nums):
                 raise _err(n, f"ending numbers '{tok[1:-1]}' must look like 1,2,3")
             ending = tuple(int(p) for p in nums)
+            ending_first_bar = len(bars)
         elif tok == "}":
             if ending is None:
                 raise _err(n, "'}' without a matching '{'")
-            if chords:
-                pending_ending = ending
+            if not chords and len(bars) == ending_first_bar:
+                raise _err(n, "ending '{...}' has no bars inside it")
+            ending_just_closed = bool(chords)
             ending = None
         elif re.fullmatch(r"x\d+", tok) and not chords and bars and bars[-1].repeat_end:
             bars[-1].repeat_count = int(tok[1:])
+        elif not _is_chord(tok):
+            raise _err(n, f"'{tok}' isn't a chord (notes and directions go on a line starting with '->')")
+        elif ending_just_closed:
+            raise _err(n, f"'{tok}' comes right after '}}' in the same bar; put a '|' after the '}}'")
         else:
             chords.append(tok)
             pending_ending = ending
@@ -115,6 +138,8 @@ def parse(text: str) -> Chart:
         line = raw.strip()
         if not line:
             continue
+        if section is not None:
+            line = line.replace("\u2192", "->").replace("\u00d7", "x")
         m = _DIAGRAM.match(line)
         if m:
             chart.custom_shapes.append(_parse_diagram(n, m.group(1), m.group(2)))
@@ -148,6 +173,13 @@ def parse(text: str) -> Chart:
             continue
         if line.startswith("->"):
             section.items.append(Roadmap(line[2:].strip()))
+            continue
+        m = _COUNT_ONLY.match(line)
+        if m:
+            prev = section.items[-1] if section.items else None
+            if not isinstance(prev, BarLine) or not prev.bars[-1].repeat_end:
+                raise _err(n, f"'{line}' has no ':||' repeat before it to count")
+            prev.bars[-1].repeat_count = int(m.group(1) or m.group(2))
             continue
         bars, repeat_open = _parse_bars(n, line, repeat_open)
         section.items.append(BarLine(bars))
