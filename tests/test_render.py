@@ -56,3 +56,28 @@ def test_cli(tmp_path):
     bad.write_text("[A]\nC | G :||")
     p = subprocess.run([sys.executable, "-m", "chordchart", str(bad), str(out)], capture_output=True, text=True)
     assert p.returncode == 1 and p.stderr.startswith("line 2:")
+
+
+def test_key_and_tempo_in_header(tmp_path):
+    src = "title: I Knew It\nartist: Taylor Swift\nkey: C\ntempo: 94\n[A]\nC |"
+    c = parse(src)
+    assert (c.key, c.tempo) == ("C", "94")
+    out = tmp_path / "k.pdf"
+    render(c, str(out))
+    first_lines = PdfReader(out).pages[0].extract_text().splitlines()[:3]
+    assert any("Taylor Swift" in ln and "Key: C" in ln and "Tempo: 94 bpm" in ln for ln in first_lines)
+
+
+def test_key_tempo_without_artist_and_bpm_not_doubled(tmp_path):
+    c = parse("title: X\nkey: F#m\ntempo: 120 bpm\n[A]\nC |")
+    out = tmp_path / "k2.pdf"
+    render(c, str(out))
+    text = PdfReader(out).pages[0].extract_text()
+    assert "Tempo: 120 bpm" in text and "bpm bpm" not in text and "Key: F" in text
+
+
+def test_bad_tempo_is_an_error():
+    import pytest
+    from chordchart.parser import ChartError
+    with pytest.raises(ChartError, match=r"^line 1:.*tempo"):
+        parse("tempo: fast\n[A]\nC |")

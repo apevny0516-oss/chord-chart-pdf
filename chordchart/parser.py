@@ -10,7 +10,7 @@ class ChartError(ValueError):
     pass
 
 
-HEADER_KEYS = {"title", "artist", "capo", "footer", "bars_per_line"}
+HEADER_KEYS = {"title", "artist", "capo", "key", "tempo", "footer", "bars_per_line"}
 _TOKEN = re.compile(r"\s*(\|\|:|:\|\||\|\||\||\{[\d,\s]+:|\}|[^\s|{}:]+)")
 _SECTION = re.compile(r"^\[([^\]]+)\]\s*(.*)$")
 _DIAGRAM = re.compile(r"^diagram\s+(\S+)\s*:\s*(.*)$")
@@ -319,6 +319,11 @@ def parse(text: str) -> Chart:
                     if key == "bars_per_line" and num < 1:
                         raise _err(n, "bars_per_line must be at least 1")
                     setattr(chart, key, num)
+                elif key == "tempo":
+                    m = re.fullmatch(r"(\d{2,3})(?:\s*bpm)?", value, re.I)
+                    if not m:
+                        raise _err(n, f"tempo must be a number like 94 or 94 bpm, got '{value}'")
+                    chart.tempo = m.group(1)
                 else:
                     setattr(chart, key, value or None)
                 continue

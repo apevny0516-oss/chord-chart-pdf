@@ -475,6 +475,16 @@ def _shrink(text: str | None, font: str, size: float, avail: float, floor: float
     return size
 
 
+def subtitle(chart: Chart) -> str | None:
+    """Artist, key and tempo on one line, e.g. 'Taylor Swift  ·  Key: C  ·  Tempo: 94 bpm'."""
+    parts = [chart.artist] if chart.artist else []
+    if chart.key:
+        parts.append(f"Key: {pretty(chart.key)}")
+    if chart.tempo:
+        parts.append(f"Tempo: {chart.tempo} bpm")
+    return "  \u00b7  ".join(parts) if parts else None
+
+
 def header_plan(chart: Chart, shapes) -> HeaderPlan:
     capo_w = width(f"Capo {chart.capo}", BOLD, 15) + 16 if chart.capo is not None else 0.0
     full_right = PAGE_W - MARGIN
@@ -483,7 +493,7 @@ def header_plan(chart: Chart, shapes) -> HeaderPlan:
         title_w = right - capo_w - MARGIN
         return HeaderPlan(in_header, right,
                           _shrink(chart.title, BOLD, TITLE_SIZE, title_w), title_w,
-                          _shrink(chart.artist, REGULAR, ARTIST_SIZE, right - MARGIN))
+                          _shrink(subtitle(chart), REGULAR, ARTIST_SIZE, right - MARGIN))
 
     strip = len(shapes) * (DIAGRAM_W + DIAGRAM_GAP) - DIAGRAM_GAP
     if shapes and strip + DIAGRAM_GAP <= CONTENT_W * 0.5:
@@ -496,7 +506,7 @@ def header_plan(chart: Chart, shapes) -> HeaderPlan:
 def _draw_header(c: Canvas, chart: Chart, shapes) -> float:
     """Draw title block and chord diagrams. Returns the y where content starts."""
     top = PAGE_H - MARGIN
-    if not (chart.title or chart.artist or chart.capo is not None or shapes):
+    if not (chart.title or subtitle(chart) or chart.capo is not None or shapes):
         return top
     hp = header_plan(chart, shapes)
     diagram_h = 0.0
@@ -514,10 +524,10 @@ def _draw_header(c: Canvas, chart: Chart, shapes) -> float:
         c.setFont(BOLD, hp.title_size)
         c.drawString(MARGIN, top - 22, chart.title)
         text_h = 28
-    if chart.artist:
+    if subtitle(chart):
         c.setFillColor(GREY)
         c.setFont(REGULAR, hp.artist_size)
-        c.drawString(MARGIN, top - text_h - 14, chart.artist)
+        c.drawString(MARGIN, top - text_h - 14, subtitle(chart))
         c.setFillColor(black)
         text_h += 20
     if chart.capo is not None:

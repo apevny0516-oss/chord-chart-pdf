@@ -8,6 +8,8 @@ pip install reportlab
 python -m chordchart examples/actor.chart "Actor - Conan Gray.pdf"
 ```
 
+Header lines: title, artist, key, tempo (e.g. `tempo: 94`, shown as "Tempo: 94 bpm"), capo, footer.
+
 See `examples/*.chart` for the format (repeats, endings, `%` bars, rests and rhythm figures,
 strumming lines, fermatas, tab, scale necks, chord diagrams with barres). Errors start with
 `line N:`. Tests: `pip install pytest pypdf && pytest`.

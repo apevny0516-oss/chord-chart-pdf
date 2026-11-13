@@ -46,7 +46,7 @@ def test_diagram_lines():
 @pytest.mark.parametrize("bad", [
     "[A]\n||: C | {1,2: G :||",
     "[A]\nC | G :||",
-    "tempo: 120\n[A]\nC |",
+    "swing: 120\n[A]\nC |",
     "[A]\ndiagram G: x2003",
     "",
 ])

@@ -45,6 +45,8 @@ class Chart:
     title: str | None = None
     artist: str | None = None
     capo: int | None = None
+    key: str | None = None
+    tempo: str | None = None     # digits, e.g. "94"
     footer: str | None = None
     bars_per_line: int = 4
     sections: list[Section] = field(default_factory=list)
