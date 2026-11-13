@@ -105,3 +105,10 @@ def test_repeat_count_spellings(tail):
 def test_stray_count_without_repeat_is_an_error():
     with pytest.raises(ChartError, match=r"^line 3:"):
         parse("[A]\nC | G |\nx4")
+
+
+# word labels ([CHORUS]) are grey; only letter labels (A, A1, B) get a letter color
+def test_word_labels_are_grey():
+    assert R.label_color("CHORUS") == R.label_color("INTRO") == R.HexColor(R.OTHER_COLOR)
+    assert R.label_color("C") == R.label_color("C2") == R.HexColor("#FF8AF3")
+    assert R.label_color("A1") == R.HexColor("#FFF27A")

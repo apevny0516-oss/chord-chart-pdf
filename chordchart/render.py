@@ -1,6 +1,7 @@
 """Draw a Chart as a letter-size PDF."""
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Callable
 
@@ -32,7 +33,9 @@ MIN_SCALE = 0.2
 
 
 def label_color(label: str) -> HexColor:
-    return HexColor(LABEL_COLORS.get(label[:1].upper(), OTHER_COLOR))
+    if not re.fullmatch(r"[A-Za-z]\d*", label):
+        return HexColor(OTHER_COLOR)
+    return HexColor(LABEL_COLORS.get(label[0].upper(), OTHER_COLOR))
 
 
 def fitted_font_size(chords: list[str], slot_width: float, base: float = CHORD_SIZE) -> float:
