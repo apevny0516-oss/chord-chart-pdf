@@ -15,7 +15,7 @@ from .neck import draw_scale, scale_height
 from .notation import REST_DOT_W, REST_W, draw_fermata, draw_rest, draw_rhythm, rhythm_events, rhythm_width
 from .parser import ChartError
 from .tab import column_width, draw_tab, tab_height
-from .text import ARROW, BOLD, REGULAR, pretty, width
+from .text import ARROW, BOLD, REGULAR, draw_text, pretty, width
 
 PAGE_W, PAGE_H = letter
 MARGIN = 0.6 * 72
@@ -387,8 +387,7 @@ def _bar_row(row: Row) -> Block:
                 else:
                     name = pretty(chord_name(item))
                     size = item_font_size(bar, item, left, right, row.size)
-                    c.setFont(BOLD, size)
-                    c.drawString(sx, baseline, name)
+                    draw_text(c, name, sx, baseline, BOLD, size)
                     if item.endswith(FERMATA):
                         draw_fermata(c, sx + width(name, BOLD, size) / 2, baseline + size * 0.93)
             # repeat count
@@ -569,8 +568,7 @@ def _draw_header(c: Canvas, chart: Chart, shapes) -> float:
         text_h = 28
     if subtitle(chart):
         c.setFillColor(GREY)
-        c.setFont(REGULAR, hp.artist_size)
-        c.drawString(MARGIN, top - text_h - 14, subtitle(chart))
+        draw_text(c, subtitle(chart), MARGIN, top - text_h - 14, REGULAR, hp.artist_size)
         c.setFillColor(black)
         text_h += 20
     if chart.capo is not None:

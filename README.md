@@ -19,3 +19,6 @@ Design notes and the build plan are in `docs/superpowers/`.
 Section boxes are coloured by type so students can find a section by colour: verse yellow,
 pre-chorus green, chorus blue, post-chorus teal, bridge purple, solo/interlude orange,
 tag pink, intro/outro uncoloured. A section's name wins over its letter (`[B] Chorus` is blue).
+
+Fonts: charts are set in Inter (bundled in `chordchart/fonts/`, SIL Open Font License), the free
+font closest to Apple's San Francisco. Sharp and flat signs come from DejaVu Sans when it is installed.

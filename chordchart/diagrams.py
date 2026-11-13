@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from .model import Chart, Shape
 from .parser import ChartError
-from .text import BOLD, REGULAR, pretty
+from .text import BOLD, REGULAR, draw_text, pretty
 
 _SHAPES = {
     "C": ("x32010", "-32-1-"), "A": ("x02220", "--123-"), "Am": ("x02210", "--231-"),
@@ -60,8 +60,7 @@ def draw_diagram(canvas, shape: Shape, x: float, y: float, width: float) -> floa
     canvas.saveState()
     canvas.setFillColorRGB(0, 0, 0)
     canvas.setStrokeColorRGB(0, 0, 0)
-    canvas.setFont(BOLD, name_size)
-    canvas.drawCentredString(x + width / 2, y - name_size, pretty(shape.name))
+    draw_text(canvas, pretty(shape.name), x + width / 2, y - name_size, BOLD, name_size, "center")
 
     canvas.setLineWidth(0.6)
     for i in range(6):
