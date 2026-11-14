@@ -23,7 +23,7 @@ _CHORD = re.compile(
     r"(?:maj|min|dim|aug|sus|add|omit|no|alt|M|m|\u00b0|\u00f8|\u0394|\+|-|[#b]?\d+|\(|\)|,|/\d+)*"
     r"(?:/[A-G][#b]?)?$")
 _NO_CHORD = {"%", "N.C.", "NC", "N.C"}
-RHYTHM_TOKEN = re.compile(r"^(r)?(16|8|4|2|1)(\.)?(>)?$")
+RHYTHM_TOKEN = re.compile(r"^(r)?(16|8|4|2|1)(\.)?(>)?([du])?(~)?$")
 _REST = re.compile(r"^r(16|8|4|2|1)\.?$")
 _TAB_LINE = re.compile(r"^(\s*[A-Ga-g]?[#b]?) ?(\|.*)$")
 _TAB_CHARS = set("-0123456789|:hpbsxrtvHPBSXTV/\\~()<>^.*= ")
@@ -35,7 +35,7 @@ _SCALE = re.compile(r"^scale\s+([^:]+?)\s*:\s*(.*)$")
 
 def is_rhythm_token(tok: str) -> bool:
     m = RHYTHM_TOKEN.match(tok)
-    return bool(m) and not (m.group(1) and m.group(4))
+    return bool(m) and not (m.group(1) and (m.group(4) or m.group(5) or m.group(6)))
 
 
 def _canonical_item(tok: str) -> str | None:
@@ -70,7 +70,7 @@ def _parse_strum(n: int, rest: str) -> tuple[list[str], str | None]:
         raise _err(n, "strum needs a rhythm, e.g. 'strum: 8> 8 8 8> 8 8 8> 8'")
     for tok in tokens:
         if not is_rhythm_token(tok):
-            raise _err(n, f"'{tok}' isn't a rhythm value (use 1 2 4 8 16, '.' dotted, '>' accent, 'r' rest; notes go in quotes)")
+            raise _err(n, f"'{tok}' isn't a rhythm value (use 1 2 4 8 16, '.' dotted, '>' accent, 'd'/'u' down/up stroke, '~' tie to the next note, 'r' rest; notes go in quotes)")
     return tokens, note
 
 
@@ -287,7 +287,7 @@ def parse(text: str) -> Chart:
         m = _STRUM.match(line)
         if m:
             if section is None:
-                raise _err(n, "'strum:' must come after a section line like '[A] Verse' or after the first bars")
+                current()       # a strum before any section heads the chart
             if section.strum:
                 raise _err(n, "this section already has a strum line")
             section.strum, section.strum_note = _parse_strum(n, m.group(1))

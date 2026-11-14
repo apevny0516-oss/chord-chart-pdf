@@ -161,7 +161,7 @@ def _section_header(section: Section, first: bool) -> Block | None:
         raise ChartError(f"the strum pattern in section '{section.label or section.name or 'at the top'}' "
                          "is too long for the page; shorten it to one bar")
     gap = 0 if first else 12
-    accents = bool(section.strum) and any(">" in t for t in section.strum)
+    accents = bool(section.strum) and any(">" in t or t.rstrip("~")[-1] in "du" for t in section.strum)
     heights = [HEADER_ROW_H + (5 if accents and "strum" in row else 0) for row in rows]
 
     def draw(c: Canvas, y: float, s: float) -> None:

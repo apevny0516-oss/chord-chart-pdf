@@ -17,6 +17,8 @@ class Event:
     rest: bool
     dotted: bool
     accent: bool
+    stroke: str | None = None   # 'd' down, 'u' up
+    tie: bool = False           # tied to the next note
     beam: int | None = None     # index of the beam group, None when unbeamed
     x: float = 0.0              # left edge at scale 1
 
@@ -29,7 +31,8 @@ def rhythm_events(tokens: list[str]) -> list[Event]:
     prev_beat: int | None = None
     for tok in tokens:
         m = RHYTHM_TOKEN.match(tok)
-        ev = Event(int(m.group(2)), bool(m.group(1)), bool(m.group(3)), bool(m.group(4)), x=x)
+        ev = Event(int(m.group(2)), bool(m.group(1)), bool(m.group(3)), bool(m.group(4)),
+                   stroke=m.group(5), tie=bool(m.group(6)), x=x)
         beat = int(pos // 4)
         beamable = not ev.rest and ev.dur >= 8
         prev = events[-1] if events else None
@@ -122,6 +125,11 @@ def draw_rhythm(c, tokens: list[str], x: float, y: float, k: float = 1.0) -> flo
             c.setLineWidth(0.95 * k)
             c.line(px - 0.3 * k, y - 2.3 * k, px + 5.6 * k, y - 4.3 * k)
             c.line(px + 5.6 * k, y - 4.3 * k, px - 0.3 * k, y - 6.3 * k)
+        if e.stroke:
+            _draw_stroke(c, e.stroke, px, y, k)
+    for e, nxt in zip(events, events[1:]):
+        if e.tie and not e.rest:
+            _draw_tie(c, x + e.x * k + HEAD * k, x + nxt.x * k, y, k)
     c.setLineCap(0)
     for group in stems.values():
         c.setLineWidth(2.4 * k)
@@ -138,6 +146,32 @@ def draw_rhythm(c, tokens: list[str], x: float, y: float, k: float = 1.0) -> flo
                 run = []
     c.restoreState()
     return rhythm_width(tokens, k)
+
+
+def _draw_stroke(c, stroke: str, px: float, y: float, k: float) -> None:
+    """Strum-direction mark under a note: a square bracket for down, a V for up."""
+    c.setLineWidth(0.95 * k)
+    top, bot = y - 2.3 * k, y - 6.3 * k
+    p = c.beginPath()
+    if stroke == "d":
+        p.moveTo(px - 0.3 * k, bot)
+        p.lineTo(px - 0.3 * k, top)
+        p.lineTo(px + 5.3 * k, top)
+        p.lineTo(px + 5.3 * k, bot)
+    else:
+        p.moveTo(px - 0.3 * k, top)
+        p.lineTo(px + 2.5 * k, bot)
+        p.lineTo(px + 5.3 * k, top)
+    c.drawPath(p, stroke=1, fill=0)
+
+
+def _draw_tie(c, x1: float, x2: float, y: float, k: float) -> None:
+    """Shallow tie arc under the notes, from the right of one head to the left of the next."""
+    c.setLineWidth(0.95 * k)
+    p = c.beginPath()
+    p.moveTo(x1 + 0.5 * k, y - 1.0 * k)
+    p.curveTo(x1 + 1.5 * k, y - 4.0 * k, x2 - 1.5 * k, y - 4.0 * k, x2 - 0.5 * k, y - 1.0 * k)
+    c.drawPath(p, stroke=1, fill=0)
 
 
 def draw_fermata(c, cx: float, y: float) -> None:

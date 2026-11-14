@@ -58,8 +58,9 @@ def test_second_strum_in_a_section_is_an_error():
         parse("[A]\nstrum: 4 4 4 4\nstrum: 8 8 8 8\nC |")
 
 
-def test_strum_before_anything_is_an_error():
-    with pytest.raises(ChartError, match=r"^line 1:.*strum"):
+def test_headers_after_a_top_of_chart_strum_are_an_error():
+    # a strum before any section heads the chart, so header lines must come first
+    with pytest.raises(ChartError, match=r"^line 2:"):
         parse("strum: 4 4 4 4\ntitle: X\n[A]\nC |")
 
 
